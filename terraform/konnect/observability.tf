@@ -1,7 +1,22 @@
 locals {
+  observability_rewrite_snippet = <<-LUA
+    kong.ctx.shared.obs_request_headers = kong.request.get_headers(1000) or {}
+    local headers = kong.ctx.shared.obs_request_headers
+    local request_id = headers["x-request-id"] or headers["X-Request-Id"]
+      or kong.request.get_header("x-request-id")
+      or kong.request.get_header("X-Request-Id")
+
+    local span = kong.tracing.active_span()
+    if span and request_id then
+      span:set_attribute("request.id", request_id)
+    end
+  LUA
+
   observability_access_snippet = <<-LUA
     kong.service.request.enable_buffering()
-    kong.ctx.shared.obs_request_headers = kong.request.get_headers(1000) or {}
+    if not kong.ctx.shared.obs_request_headers then
+      kong.ctx.shared.obs_request_headers = kong.request.get_headers(1000) or {}
+    end
     local body, err = kong.request.get_raw_body()
     if body ~= nil then
       kong.ctx.shared.obs_request_body = body
@@ -9,8 +24,10 @@ locals {
       kong.ctx.shared.obs_request_body = ""
     end
 
-    local request_id = kong.ctx.shared.obs_request_headers["x-request-id"]
-      or kong.ctx.shared.obs_request_headers["X-Request-Id"]
+    local headers = kong.ctx.shared.obs_request_headers
+    local request_id = headers["x-request-id"] or headers["X-Request-Id"]
+      or kong.request.get_header("x-request-id")
+      or kong.request.get_header("X-Request-Id")
 
     local span = kong.tracing.active_span()
     if span and request_id then
@@ -27,9 +44,10 @@ locals {
 
   observability_log_snippet = <<-LUA
     local serialized = kong.log.serialize()
-    local request_headers = kong.ctx.shared.obs_request_headers or {}
-    local request_id = request_headers["x-request-id"]
-      or request_headers["X-Request-Id"]
+    local headers = kong.ctx.shared.obs_request_headers or {}
+    local request_id = headers["x-request-id"] or headers["X-Request-Id"]
+      or kong.request.get_header("x-request-id")
+      or kong.request.get_header("X-Request-Id")
       or (serialized.request and serialized.request.id)
 
     local span = kong.tracing.active_span()
@@ -45,9 +63,12 @@ locals {
   LUA
 
   access_log_request_id = <<-LUA
-    local headers = kong.ctx.shared.obs_request_headers or {}
     local serialized = kong.log.serialize()
-    return headers["x-request-id"] or headers["X-Request-Id"] or serialized.request.id
+    local headers = kong.ctx.shared.obs_request_headers or {}
+    return headers["x-request-id"] or headers["X-Request-Id"]
+      or kong.request.get_header("x-request-id")
+      or kong.request.get_header("X-Request-Id")
+      or (serialized.request and serialized.request.id)
   LUA
 
   access_log_trace_id = <<-LUA
@@ -116,6 +137,7 @@ resource "konnect_gateway_plugin_post_function" "observability_capture" {
   control_plane_id = var.konnect_control_plane_id
 
   config = {
+    rewrite     = [local.observability_rewrite_snippet]
     access      = [local.observability_access_snippet]
     body_filter = [local.observability_body_filter_snippet]
     log         = [local.observability_log_snippet]

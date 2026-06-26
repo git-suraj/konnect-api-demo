@@ -1,0 +1,570 @@
+{
+  "tiles": [
+    {
+      "id": "f9232bd7-3021-44fb-8fb1-4921ebbe9fe8",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 1
+        },
+        "position": {
+          "col": 0,
+          "row": 0
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "single_value",
+          "chart_title": "Total service requests (last day)"
+        },
+        "query": {
+          "filters": [],
+          "metrics": [
+            "request_count"
+          ],
+          "datasource": "api_usage",
+          "dimensions": []
+        }
+      }
+    },
+    {
+      "id": "a477a34b-bbac-4190-b708-04c534b9321f",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 1
+        },
+        "position": {
+          "col": 2,
+          "row": 0
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "single_value",
+          "chart_title": "Number of errors (4xx, 5xx)"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "status_code_grouped",
+              "value": [
+                "4XX",
+                "5XX"
+              ],
+              "operator": "in"
+            }
+          ],
+          "metrics": [
+            "request_count"
+          ],
+          "datasource": "api_usage",
+          "dimensions": []
+        }
+      }
+    },
+    {
+      "id": "41bdd7cf-03cc-44bb-b92d-95509dc7bddc",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 1
+        },
+        "position": {
+          "col": 4,
+          "row": 0
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "single_value",
+          "chart_title": "Average response time"
+        },
+        "query": {
+          "filters": [],
+          "metrics": [
+            "response_latency_average"
+          ],
+          "datasource": "api_usage",
+          "dimensions": []
+        }
+      }
+    },
+    {
+      "id": "86e070c4-3551-421c-803d-6db6f1b1b216",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 6,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 1
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "timeseries_line",
+          "stacked": false,
+          "chart_title": "Requests by gateway service over time"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "gateway_service",
+              "operator": "not_empty"
+            }
+          ],
+          "metrics": [
+            "request_count"
+          ],
+          "datasource": "api_usage",
+          "dimensions": [
+            "gateway_service",
+            "time"
+          ]
+        }
+      }
+    },
+    {
+      "id": "d699300d-9c98-45f0-9c4e-9543dc0636b4",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 3
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "horizontal_bar",
+          "stacked": true,
+          "chart_title": "Top 5 gateway services by requests"
+        },
+        "query": {
+          "limit": 5,
+          "filters": [
+            {
+              "field": "gateway_service",
+              "operator": "not_empty"
+            }
+          ],
+          "metrics": [
+            "request_count"
+          ],
+          "datasource": "api_usage",
+          "dimensions": [
+            "gateway_service"
+          ]
+        }
+      }
+    },
+    {
+      "id": "bc082298-60ba-48eb-9411-84607939f1f3",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 2
+        },
+        "position": {
+          "col": 2,
+          "row": 3
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "horizontal_bar",
+          "stacked": true,
+          "chart_title": "Top 5 routes by requests"
+        },
+        "query": {
+          "limit": 5,
+          "filters": [
+            {
+              "field": "route",
+              "operator": "not_empty"
+            }
+          ],
+          "metrics": [
+            "request_count"
+          ],
+          "datasource": "api_usage",
+          "dimensions": [
+            "route"
+          ]
+        }
+      }
+    },
+    {
+      "id": "d7c786f7-0d5b-42bc-9b2b-a0b5622b0e6b",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 2
+        },
+        "position": {
+          "col": 4,
+          "row": 3
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "vertical_bar",
+          "stacked": true,
+          "chart_title": "Top 5 consumers by requests"
+        },
+        "query": {
+          "limit": 5,
+          "filters": [
+            {
+              "field": "consumer",
+              "operator": "not_empty"
+            }
+          ],
+          "metrics": [
+            "request_count"
+          ],
+          "datasource": "api_usage",
+          "dimensions": [
+            "consumer"
+          ]
+        }
+      }
+    },
+    {
+      "id": "51eaaf17-b417-494f-9c73-37000560bc8a",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 5
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "donut",
+          "chart_title": "Gateway status codes"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "gateway_service",
+              "operator": "not_empty"
+            }
+          ],
+          "metrics": [
+            "request_count"
+          ],
+          "datasource": "api_usage",
+          "dimensions": [
+            "status_code"
+          ]
+        }
+      }
+    },
+    {
+      "id": "dde64d0f-b16d-46e2-9eb4-2ab89d38d8ce",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 3,
+          "row": 5
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "horizontal_bar",
+          "stacked": true,
+          "chart_title": "Top 5 services by 5xx error sources (last 30 days)"
+        },
+        "query": {
+          "limit": 5,
+          "filters": [
+            {
+              "field": "status_code_grouped",
+              "value": [
+                "5XX"
+              ],
+              "operator": "in"
+            },
+            {
+              "field": "gateway_service",
+              "operator": "not_empty"
+            }
+          ],
+          "metrics": [
+            "request_count"
+          ],
+          "datasource": "api_usage",
+          "dimensions": [
+            "gateway_service",
+            "status_code"
+          ],
+          "time_range": {
+            "type": "relative",
+            "time_range": "30d"
+          },
+          "granularity": "thirtyMinutely"
+        }
+      }
+    },
+    {
+      "id": "e8b9c7fa-be39-409e-90b4-aea67b28ccfc",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 6,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 7
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "timeseries_bar",
+          "stacked": true,
+          "chart_title": "Errors over time"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "status_code_grouped",
+              "value": [
+                "4XX",
+                "5XX"
+              ],
+              "operator": "in"
+            }
+          ],
+          "metrics": [
+            "request_count"
+          ],
+          "datasource": "api_usage",
+          "dimensions": [
+            "status_code_grouped",
+            "time"
+          ]
+        }
+      }
+    },
+    {
+      "id": "5121f3e8-452f-44ed-a30c-dac9bba65483",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 9
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "timeseries_line",
+          "stacked": false,
+          "chart_title": "Average Kong vs upstream latency over time"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "gateway_service",
+              "operator": "not_empty"
+            }
+          ],
+          "metrics": [
+            "upstream_latency_average",
+            "kong_latency_average"
+          ],
+          "datasource": "api_usage",
+          "dimensions": [
+            "time"
+          ]
+        }
+      }
+    },
+    {
+      "id": "333d3c8b-7088-4ea9-b710-dd8ad147a8c0",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 3,
+          "row": 9
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "horizontal_bar",
+          "stacked": true,
+          "chart_title": "Average response time by gateway service"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "gateway_service",
+              "operator": "not_empty"
+            }
+          ],
+          "metrics": [
+            "upstream_latency_average"
+          ],
+          "datasource": "api_usage",
+          "dimensions": [
+            "gateway_service"
+          ]
+        }
+      }
+    },
+    {
+      "id": "94172729-23a0-4ee4-864b-28c8721a8e49",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 11
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "timeseries_line",
+          "stacked": false,
+          "chart_title": "Failed authentication attempts over time"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "status_code",
+              "value": [
+                "401"
+              ],
+              "operator": "in"
+            }
+          ],
+          "metrics": [
+            "request_count"
+          ],
+          "datasource": "api_usage",
+          "dimensions": [
+            "status_code",
+            "time"
+          ]
+        }
+      }
+    },
+    {
+      "id": "97ad7e56-0072-43bf-8595-9e1290213ac7",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 3,
+          "row": 11
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "timeseries_line",
+          "stacked": false,
+          "chart_title": "Rate limit hits over time"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "status_code",
+              "value": [
+                "429"
+              ],
+              "operator": "in"
+            }
+          ],
+          "metrics": [
+            "request_count"
+          ],
+          "datasource": "api_usage",
+          "dimensions": [
+            "status_code",
+            "time"
+          ]
+        }
+      }
+    },
+    {
+      "id": "aeb4df66-febd-48e3-98fe-ce3a9a7b75a4",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 6,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 13
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "vertical_bar",
+          "stacked": true,
+          "chart_title": "Kong security report by gateway service"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "gateway_service",
+              "operator": "not_empty"
+            },
+            {
+              "field": "status_code",
+              "value": [
+                "401",
+                "429"
+              ],
+              "operator": "in"
+            }
+          ],
+          "metrics": [
+            "request_count"
+          ],
+          "datasource": "api_usage",
+          "dimensions": [
+            "gateway_service",
+            "status_code"
+          ]
+        }
+      }
+    }
+  ],
+  "template_id": "SHARED_SERVICES"
+}

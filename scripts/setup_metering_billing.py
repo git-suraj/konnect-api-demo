@@ -53,7 +53,7 @@ FEATURE_SPECS = [
         "description": "Demo API Requests Feature Demo Bank",
         "meter_key": "demo_api_requests_total",
         "meter_filters": {
-            "control_plane_id": {"eq": "abf0ddb5-0c27-4ab3-8825-971be6217904"},
+            "control_plane_id": {"eq": f"{KONNECT_CP_ID}"},
             "route_name": {"eq": "route-orders-metering-consumer"},
         },
         "labels": DEMO_LABELS,
@@ -64,7 +64,7 @@ PLAN_SPECS = [
     {
         "key": "demo_api_requests_plan_demo_bank_1",
         "name": "Demo Bank 1 API Requests Plan",
-        "currency": "USD",
+        "currency": "KRW",
         "billing_cadence": "P1M",
         "labels": DEMO_LABELS,
         "pro_rating_enabled": True,

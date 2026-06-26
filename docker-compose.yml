@@ -170,7 +170,7 @@ services:
       - "8081:8080"
 
   loki:
-    image: grafana/loki:3.0.0
+    image: grafana/loki:3.7.2
     container_name: konnect-demo-loki
     command: ["-config.file=/etc/loki/config.yaml"]
     ports:
@@ -247,7 +247,7 @@ services:
       - ./certs/crypto:/crypto:ro
 
   grafana:
-    image: grafana/grafana:11.0.0
+    image: grafana/grafana:11.6
     container_name: konnect-demo-grafana
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}

@@ -19,6 +19,10 @@ IMG_DIR = Path("/img")
 KONG_PROXY_URL = os.environ.get("KONG_PROXY_URL", "http://localhost:8000")
 KONG_TLS_PROXY_URL = os.environ.get("KONG_TLS_PROXY_URL", "https://kong-dp:8443")
 LOKI_QUERY_URL = os.environ.get("LOKI_QUERY_URL", "http://loki:3100/loki/api/v1/query")
+LOKI_QUERY_RANGE_URL = os.environ.get(
+    "LOKI_QUERY_RANGE_URL",
+    LOKI_QUERY_URL.replace("/query", "/query_range"),
+)
 KONNECT_UI_BASE_URL = os.environ.get("KONNECT_UI_BASE_URL", "https://cloud.konghq.com/us").rstrip("/")
 KONNECT_CP_ID = os.environ.get("KONNECT_CP_ID", "").strip()
 
@@ -726,31 +730,45 @@ def normalize_detail_entities(items):
 def lookup_trace_id_for_request(request_id: str, attempts: int = 5, delay_seconds: float = 0.5) -> str | None:
     if not request_id:
         return None
-    query = (
-        '{service_name="kong-data-plane"} | log_type="access" '
-        f'| request_id="{request_id}" | line_format "{{{{.trace_id}}}}"'
-    )
+    queries = [
+        (
+            '{service_name="kong-data-plane"} | log_type="access" '
+            f'| http_request_header_x_request_id="{request_id}"'
+        ),
+        (
+            '{service_name="kong-data-plane"} | log_type="access" '
+            f'| request_id="{request_id}"'
+        ),
+    ]
+    end_ns = int(time.time() * 1_000_000_000)
+    start_ns = end_ns - (24 * 60 * 60 * 1_000_000_000)
     for attempt in range(attempts):
-        try:
-            url = f"{LOKI_QUERY_URL}?{urllib.parse.urlencode({'query': query})}"
-            req = urllib.request.Request(url, headers={"Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=3, context=ssl._create_unverified_context()) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            results = (((payload or {}).get("data") or {}).get("result")) or []
-            for stream in results:
-                for value in stream.get("values", []):
-                    if len(value) >= 2:
-                        trace_id = (value[1] or "").strip()
-                        if trace_id and trace_id != "null":
-                            return trace_id
-        except Exception:
-            pass
+        for query in queries:
+            try:
+                params = {
+                    "query": query,
+                    "limit": 5,
+                    "start": start_ns,
+                    "end": end_ns,
+                }
+                url = f"{LOKI_QUERY_RANGE_URL}?{urllib.parse.urlencode(params)}"
+                req = urllib.request.Request(url, headers={"Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=3, context=ssl._create_unverified_context()) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                results = (((payload or {}).get("data") or {}).get("result")) or []
+                for stream in results:
+                    labels = stream.get("stream") or {}
+                    trace_id = (labels.get("trace_id") or "").strip()
+                    if trace_id and trace_id != "null":
+                        return trace_id
+            except Exception:
+                pass
         if attempt < attempts - 1:
             time.sleep(delay_seconds)
     return None
 
 
-def enrich_payload_with_trace(payload):
+def attach_request_metadata(payload):
     if not isinstance(payload, dict):
         return payload
 
@@ -775,29 +793,6 @@ def enrich_payload_with_trace(payload):
     result = payload.get("result")
     if isinstance(result, dict):
         result["requestId"] = request_id
-
-    trace_id = lookup_trace_id_for_request(request_id)
-    if trace_id:
-        payload["traceId"] = trace_id
-        if isinstance(result, dict):
-            result["traceId"] = trace_id
-
-    detail_view = payload.get("detailView")
-    if isinstance(detail_view, dict):
-        if trace_id:
-            detail_view["traceId"] = trace_id
-        entities = detail_view.get("entities")
-        if isinstance(entities, list):
-            entities.append(
-                [
-                    "Trace Source",
-                    (
-                        f"{trace_id} resolved from Loki using request_id {request_id}"
-                        if trace_id
-                        else f"Trace lookup uses Loki with request_id {request_id}; trace_id not resolved yet"
-                    ),
-                ]
-            )
 
     return payload
 
@@ -927,7 +922,12 @@ def extract_rate_limit_metrics(headers):
             metrics["remaining"] = parsed
         elif "reset" in lower_key and metrics["reset"] is None:
             metrics["reset"] = parsed
-        elif "limit" in lower_key and metrics["limit"] is None:
+        elif (
+            "limit" in lower_key
+            and "remaining" not in lower_key
+            and "reset" not in lower_key
+            and metrics["limit"] is None
+        ):
             metrics["limit"] = parsed
     return metrics
 
@@ -940,6 +940,10 @@ def update_execution_counter(counter_key, limit, remaining, reset_seconds, respo
 
     if limit is not None and remaining is not None and response_status != 429:
         execution_count = max(limit - remaining, 0)
+        if execution_count == 0:
+            execution_count = (state["execution_count"] + 1) if state else 1
+    elif limit is not None and remaining is not None and response_status == 429:
+        execution_count = max(limit - remaining + 1, 1)
     elif state:
         execution_count = state["execution_count"] + 1
     elif limit is not None:
@@ -1256,6 +1260,10 @@ class DemoHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/traces/lookup":
+            self.handle_trace_lookup(parsed)
+            return
         if self.path == "/api/config":
             self.respond_json(
                 {
@@ -3595,8 +3603,22 @@ class DemoHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length).decode("utf-8") if length else "{}"
         return json.loads(raw or "{}")
 
+    def handle_trace_lookup(self, parsed):
+        request_id = (urllib.parse.parse_qs(parsed.query).get("request_id") or [""])[0].strip()
+        if not request_id:
+            self.respond_json({"error": "request_id is required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        trace_id = lookup_trace_id_for_request(request_id)
+        self.respond_json(
+            {
+                "requestId": request_id,
+                "traceId": trace_id,
+                "found": trace_id is not None,
+            }
+        )
+
     def respond_json(self, payload, status=HTTPStatus.OK):
-        payload = enrich_payload_with_trace(payload)
+        payload = attach_request_metadata(payload)
         raw = json_bytes(payload)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")

@@ -1,7 +1,7 @@
 # Metering and Billing Walkthrough
 
 Metering and Billing setup. <br>
-`Meter request -> create feature -> create plans and add feature and add rate card -> publish plan -> create customers -> subscribe to plan`
+`Product Catalog -> create feature -> create plans and add feature and add rate card -> publish plan -> create customers -> subscribe to plan`
 
 ## Step 1
 

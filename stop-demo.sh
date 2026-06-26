@@ -22,6 +22,9 @@ if [[ -n "${KONNECT_TOKEN:-}" && -n "${KONNECT_CP_ID:-}" ]]; then
   echo "Tearing down Konnect audit webhook"
   python3 scripts/teardown_konnect_audit.py || true
 
+  echo "Tearing down Konnect observability dashboard"
+  python3 scripts/teardown_konnect_observability_dashboard.py || true
+
   echo "Destroying Konnect-managed demo entities"
   terraform -chdir=terraform/konnect init -input=false >/dev/null
   TF_VAR_konnect_control_plane_id="$KONNECT_CP_ID" \
@@ -39,7 +42,7 @@ fi
 
 if docker info >/dev/null 2>&1; then
 echo "Stopping local demo containers"
-docker compose down --remove-orphans --timeout 20
+docker compose down -v --remove-orphans --timeout 20
 fi
 
 echo "Cleaning Terraform runtime state"

@@ -46,6 +46,11 @@ CANCEL_SETTLE_POLL_SECONDS = float(os.environ.get("KONNECT_METERING_CANCEL_SETTL
 MAX_LIST_PAGES = int(os.environ.get("KONNECT_METERING_MAX_LIST_PAGES", "100"))
 CUSTOMER_DELETE_RETRY_ATTEMPTS = int(os.environ.get("KONNECT_METERING_CUSTOMER_DELETE_RETRY_ATTEMPTS", "40"))
 CUSTOMER_DELETE_RETRY_DELAY_SECONDS = float(os.environ.get("KONNECT_METERING_CUSTOMER_DELETE_RETRY_DELAY_SECONDS", "3"))
+INVOICE_SETTLE_TIMEOUT_SECONDS = int(os.environ.get("KONNECT_METERING_INVOICE_SETTLE_TIMEOUT_SECONDS", "120"))
+INVOICE_SETTLE_POLL_SECONDS = float(os.environ.get("KONNECT_METERING_INVOICE_SETTLE_POLL_SECONDS", "2"))
+
+TERMINAL_INVOICE_STATUSES = {"void", "paid", "deleted"}
+DRAFT_INVOICE_STATUSES = {"draft"}
 
 
 def load_dotenv() -> None:
@@ -131,10 +136,12 @@ def extract_items(payload) -> list[dict]:
     return []
 
 
-def list_resources(path: str) -> list[dict]:
+def list_resources(path: str, *, extra_query: dict[str, str] | None = None) -> list[dict]:
     items: list[dict] = []
     next_path: str | None = path
     query: dict[str, str] | None = {"page[size]": "100"}
+    if extra_query:
+        query.update(extra_query)
     seen_pages: set[str] = set()
     page_count = 0
 
@@ -241,6 +248,102 @@ def wait_for_subscription_cancellation(customer_ids: set[str], plan_ids: set[str
     return False, last_statuses
 
 
+def invoice_statuses(invoice: dict) -> tuple[str, str]:
+    status = str(invoice.get("status") or "").lower()
+    details = invoice.get("statusDetails") or invoice.get("status_details") or {}
+    extended = str(details.get("extendedStatus") or details.get("extended_status") or status).lower()
+    return status, extended
+
+
+def invoice_is_terminal(invoice: dict) -> bool:
+    status, extended = invoice_statuses(invoice)
+    return status in TERMINAL_INVOICE_STATUSES or extended in TERMINAL_INVOICE_STATUSES
+
+
+def invoice_is_gathering(invoice: dict) -> bool:
+    status, extended = invoice_statuses(invoice)
+    return status == "gathering" or extended == "gathering"
+
+
+def list_customer_invoices(customer_id: str) -> list[dict]:
+    return list_resources("/metering/v1/billing/invoices", extra_query={"customers": customer_id})
+
+
+def settle_invoice(invoice: dict) -> str:
+    invoice_id = invoice["id"]
+    status, extended = invoice_statuses(invoice)
+
+    if invoice_is_terminal(invoice):
+        return f"already_terminal_{status or extended}"
+
+    if invoice_is_gathering(invoice):
+        return "waiting_gathering"
+
+    if status in DRAFT_INVOICE_STATUSES or extended in DRAFT_INVOICE_STATUSES:
+        result = best_effort_delete(f"/metering/v1/billing/invoices/{invoice_id}")
+        if result == "deleted":
+            return result
+        if "not in final state" not in result and "cannot" not in result.lower():
+            return result
+
+    void_result = best_effort_post(f"/metering/v1/billing/invoices/{invoice_id}/void", {})
+    if void_result == "ok":
+        return "voided"
+    return void_result
+
+
+def wait_and_settle_invoices(customer_ids: set[str]) -> tuple[bool, dict[str, dict[str, str]]]:
+    deadline = time.time() + INVOICE_SETTLE_TIMEOUT_SECONDS
+    results: dict[str, dict[str, str]] = {}
+    poll_count = 0
+
+    while time.time() < deadline:
+        poll_count += 1
+        blocking: dict[str, list[str]] = {}
+        gathering = False
+
+        for customer_id in sorted(customer_ids):
+            invoices = list_customer_invoices(customer_id)
+            customer_results = results.setdefault(customer_id, {})
+
+            for invoice in invoices:
+                invoice_id = invoice["id"]
+                if invoice_is_terminal(invoice):
+                    customer_results.setdefault(invoice_id, "already_terminal")
+                    continue
+
+                status, extended = invoice_statuses(invoice)
+                if invoice_is_gathering(invoice):
+                    gathering = True
+                    customer_results[invoice_id] = "waiting_gathering"
+                    blocking.setdefault(customer_id, []).append(f"{invoice_id}:gathering")
+                    continue
+
+                action = settle_invoice(invoice)
+                customer_results[invoice_id] = action
+                log(
+                    f"Invoice {invoice_id} for customer {customer_id} "
+                    f"(status={status}, extended={extended}): {action}"
+                )
+
+            for invoice in list_customer_invoices(customer_id):
+                if invoice_is_terminal(invoice):
+                    continue
+                status, extended = invoice_statuses(invoice)
+                blocking.setdefault(customer_id, []).append(f"{invoice['id']}:{status}/{extended}")
+
+        if not blocking:
+            return True, results
+
+        if gathering:
+            log(f"Waiting for gathering invoices to settle (poll {poll_count}, blocking={blocking})")
+        else:
+            log(f"Waiting for terminal invoice state (poll {poll_count}, blocking={blocking})")
+        time.sleep(INVOICE_SETTLE_POLL_SECONDS)
+
+    return False, results
+
+
 def main() -> int:
     load_dotenv()
     global KONNECT_SERVER_URL, SYSTEM_TOKEN
@@ -277,6 +380,10 @@ def main() -> int:
 
     settled, final_subscription_statuses = wait_for_subscription_cancellation(target_customer_ids, target_plan_ids)
     log(f"Subscription cancellation settled={settled}")
+
+    log("Settling demo customer invoices before catalog deletion")
+    invoices_settled, invoice_results = wait_and_settle_invoices(target_customer_ids)
+    log(f"Invoice settlement complete={invoices_settled}")
 
     plan_archive_results = {}
     refreshed_plans = [item for item in list_resources("/v3/openmeter/plans") if is_target_plan(item)]
@@ -316,6 +423,8 @@ def main() -> int:
                 "subscriptions": subscription_results,
                 "subscription_settled": settled,
                 "subscription_statuses": final_subscription_statuses,
+                "invoices_settled": invoices_settled,
+                "invoices": invoice_results,
                 "plan_archives": plan_archive_results,
                 "plans": plan_results,
                 "features": feature_results,

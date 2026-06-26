@@ -1233,6 +1233,7 @@ async function runScenario() {
     });
     const payload = await response.json();
     state.lastRun = payload;
+    void resolveTraceForLastRun(getCurrentRequestId());
     elements.consoleDetailButton.disabled = false;
     elements.expectedOutcome.textContent = computeExpectedOutcome();
     renderRows(elements.requestPreviewGrid, payload.requestPreview);
@@ -1425,9 +1426,88 @@ function openLink(url) {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
+let traceLookupAbort = null;
+
 function getCurrentRequestId() {
-  const headers = state.lastRun?.consoleView?.request?.headers || {};
-  return headers["x-request-id"] || headers["X-Request-Id"] || null;
+  return (
+    state.lastRun?.requestId
+    || state.lastRun?.result?.requestId
+    || state.lastRun?.consoleView?.request?.headers?.["x-request-id"]
+    || state.lastRun?.consoleView?.request?.headers?.["X-Request-Id"]
+    || null
+  );
+}
+
+function applyTraceToLastRun(traceId, requestId) {
+  if (!state.lastRun || getCurrentRequestId() !== requestId) {
+    return;
+  }
+
+  if (traceId) {
+    state.lastRun.traceId = traceId;
+    if (state.lastRun.result) {
+      state.lastRun.result.traceId = traceId;
+    }
+    if (state.lastRun.detailView) {
+      state.lastRun.detailView.traceId = traceId;
+    }
+  }
+
+  if (!state.lastRun.detailView) {
+    return;
+  }
+
+  const entities = state.lastRun.detailView.entities || (state.lastRun.detailView.entities = []);
+  const message = traceId
+    ? `${traceId} resolved from Loki using request_id ${requestId}`
+    : `Trace lookup finished for request_id ${requestId}; trace_id not resolved`;
+  const row = ["Trace Source", message];
+  const index = entities.findIndex(([label]) => label === "Trace Source");
+  if (index >= 0) {
+    entities[index] = row;
+  } else {
+    entities.push(row);
+  }
+
+  if (!elements.detailViewModal.classList.contains("hidden")) {
+    renderDetailView(state.lastRun.detailView);
+  }
+}
+
+async function resolveTraceForLastRun(requestId) {
+  if (!requestId) {
+    return;
+  }
+
+  if (traceLookupAbort) {
+    traceLookupAbort.abort();
+  }
+  const controller = new AbortController();
+  traceLookupAbort = controller;
+
+  try {
+    const url = `/api/traces/lookup?${new URLSearchParams({ request_id: requestId })}`;
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+    applyTraceToLastRun(payload.traceId || null, payload.requestId);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
+  } finally {
+    if (traceLookupAbort === controller) {
+      traceLookupAbort = null;
+    }
+  }
+}
+
+function getRequestIdLogQuery(requestId) {
+  return requestId
+    ? `{service_name="kong-data-plane"} | log_type="access" | http_request_header_x_request_id="${requestId}"`
+    : '{service_name="kong-data-plane"} | log_type="access" | http_request_header_x_request_id="your-request-id"';
 }
 
 function getCurrentTraceId() {
@@ -1494,8 +1574,8 @@ function getPayloadInspectionUrl() {
     : "http://localhost:3001/explore";
   const url = new URL(baseUrl, window.location.origin);
   const query = requestId
-    ? `{service_name="kong-data-plane"} | request_id="${requestId}"`
-    : '{service_name="kong-data-plane"} | request_id="your-request-id"';
+    ? getRequestIdLogQuery(requestId)
+    : getRequestIdLogQuery(null);
   const paneState = {
     logs: {
       datasource: "loki",

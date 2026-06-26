@@ -130,7 +130,7 @@
       },
       "id": 2,
       "options": {
-        "content": "### Request / response lookup by request ID\n\nUse the dashboard variable at the top, then run this in Explore against **Loki**:\n\n```logql\n{service_name=\"kong-data-plane\"} | request_id=\"$request_id\"\n```\n\nThis returns the exact request record with:\n- `request_headers`\n- `request_body`\n- `response_headers`\n- `response_body`\n- `trace_id`\n\nTo open the correlated trace in **Tempo**, run this in Explore:\n\n```traceql\n{ span.\"request.id\" = \"$request_id\" }\n```\n\nThat gives Jaeger-style trace visibility for the same request ID across all Kong-handled traffic.",
+        "content": "### Request / response lookup by request ID\n\nUse the dashboard variable at the top, then run this in Explore against **Loki**:\n\n```logql\n{service_name=\"kong-data-plane\"} | log_type=\"access\" | http_request_header_x_request_id=\"$request_id\"\n```\n\nThis returns the exact request record with:\n- `request_headers`\n- `request_body`\n- `response_headers`\n- `response_body`\n- `trace_id`\n\nTo open the correlated trace in **Tempo**, run this in Explore:\n\n```traceql\n{ span.\"request.id\" = \"$request_id\" }\n```\n\nThat gives Jaeger-style trace visibility for the same demo request ID across all Kong-handled traffic.",
         "mode": "markdown"
       },
       "title": "Lookup Queries",

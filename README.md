@@ -450,9 +450,8 @@ Metering & Billing automation notes:
 
 UI link behavior:
 
-- `DEMO_LOGS_URL` sets the **Konnect Observability** button target.
+- `./start-demo.sh` provisions the Konnect **Shared services** analytics dashboard from `observability/konnect/dashboards/shared-services.json`, exports `DEMO_LOGS_URL`, and recreates `demo-ui` with that value.
 - `DEMO_DEBUGGER_URL` sets the **Debugger** button target.
-- Update those two values directly in `.env` if you want them to point at your own Konnect UI URLs.
 
 ### Certificates
 
@@ -612,6 +611,7 @@ The lifecycle scenes use dedicated `orders-v1` and `orders-v2` upstreams so the 
 
 - Konnect sends audit events to a public HTTPS webhook exposed through ngrok.
 - The webhook uses a random ngrok URL on each run.
+- ngrok free plan shows a browser warning page for HTML traffic. Konnect webhook delivery is API traffic and is not affected. To test the public URL manually, send `ngrok-skip-browser-warning: 1` or use a non-browser User-Agent.
 - A local audit receiver validates the shared secret, normalizes the event, and writes it into Loki.
 - Grafana provisions a separate dashboard named `Konnect Audit Trail`.
 - The dashboard focuses on control-plane change events and answers:
