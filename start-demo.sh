@@ -7,6 +7,7 @@ RUNTIME_DIR="$ROOT_DIR/.runtime"
 NGROK_PID_FILE="$RUNTIME_DIR/ngrok.pid"
 NGROK_LOG_FILE="$RUNTIME_DIR/ngrok.log"
 NGROK_API_URL="http://127.0.0.1:4040/api/tunnels"
+AUTH0_DPOP_SETUP_JSON="$RUNTIME_DIR/auth0_dpop_setup.json"
 
 if [[ -f ".env" ]]; then
   set -a
@@ -16,6 +17,11 @@ if [[ -f ".env" ]]; then
 fi
 
 mkdir -p "$RUNTIME_DIR"
+
+AUTH0_TF_VAR_DOMAIN=""
+AUTH0_TF_VAR_API_IDENTIFIER=""
+AUTH0_TF_VAR_CLIENT_ID=""
+AUTH0_TF_VAR_CLIENT_SECRET=""
 
 if [[ -z "${KONNECT_TOKEN:-}" || -z "${KONNECT_CP_ID:-}" ]]; then
   echo "KONNECT_TOKEN and KONNECT_CP_ID must be set in .env" >&2
@@ -45,6 +51,81 @@ wait_for_docker() {
 }
 
 wait_for_docker
+
+persist_auth0_client_secret() {
+  if [[ ! -f ".env" || -z "${AUTH0_TF_VAR_CLIENT_SECRET}" || -n "${AUTH0_DPOP_CLIENT_SECRET:-}" ]]; then
+    return
+  fi
+
+  python3 - "$ROOT_DIR/.env" "$AUTH0_TF_VAR_CLIENT_SECRET" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+secret = sys.argv[2]
+
+lines = env_path.read_text().splitlines()
+updated = False
+for index, line in enumerate(lines):
+    if line.startswith("AUTH0_DPOP_CLIENT_SECRET="):
+        lines[index] = f'AUTH0_DPOP_CLIENT_SECRET="{secret}"'
+        updated = True
+        break
+
+if not updated:
+    lines.append(f'AUTH0_DPOP_CLIENT_SECRET="{secret}"')
+
+env_path.write_text("\n".join(lines) + "\n")
+PY
+}
+
+persist_auth0_env_value() {
+  local key="$1"
+  local value="$2"
+  local current_value="${3:-}"
+
+  if [[ ! -f ".env" || -z "$value" || -n "$current_value" ]]; then
+    return
+  fi
+
+  python3 - "$ROOT_DIR/.env" "$key" "$value" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+
+lines = env_path.read_text().splitlines()
+updated = False
+for index, line in enumerate(lines):
+    if line.startswith(f"{key}="):
+        lines[index] = f'{key}="{value}"'
+        updated = True
+        break
+
+if not updated:
+    lines.append(f'{key}="{value}"')
+
+env_path.write_text("\n".join(lines) + "\n")
+PY
+}
+
+if [[ -n "${AUTH0_DOMAIN:-}" && -n "${AUTH0_MANAGEMENT_CLIENT_ID:-}" && -n "${AUTH0_MANAGEMENT_CLIENT_SECRET:-}" ]]; then
+  echo "Bootstrapping Auth0 DPoP demo resources"
+  AUTH0_DPOP_ENABLE_DPOP="${AUTH0_DPOP_ENABLE_DPOP:-false}" \
+    python3 scripts/setup_auth0_dpop.py >"$AUTH0_DPOP_SETUP_JSON"
+
+  AUTH0_TF_VAR_DOMAIN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["auth0_domain"])' "$AUTH0_DPOP_SETUP_JSON")"
+  AUTH0_TF_VAR_API_IDENTIFIER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["api"]["identifier"])' "$AUTH0_DPOP_SETUP_JSON")"
+  AUTH0_TF_VAR_CLIENT_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["client"]["client_id"])' "$AUTH0_DPOP_SETUP_JSON")"
+  AUTH0_TF_VAR_CLIENT_SECRET="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["client"]["client_secret"])' "$AUTH0_DPOP_SETUP_JSON")"
+  persist_auth0_env_value "AUTH0_DPOP_API_IDENTIFIER" "$AUTH0_TF_VAR_API_IDENTIFIER" "${AUTH0_DPOP_API_IDENTIFIER:-}"
+  persist_auth0_env_value "AUTH0_DPOP_EXISTING_CLIENT_ID" "$AUTH0_TF_VAR_CLIENT_ID" "${AUTH0_DPOP_EXISTING_CLIENT_ID:-}"
+  persist_auth0_client_secret
+else
+  echo "Skipping Auth0 DPoP bootstrap because AUTH0_DOMAIN / AUTH0_MANAGEMENT_CLIENT_ID / AUTH0_MANAGEMENT_CLIENT_SECRET are not all set"
+fi
 
 stop_existing_ngrok() {
   if [[ -f "$NGROK_PID_FILE" ]]; then
@@ -118,6 +199,10 @@ TF_VAR_azure_ad_tenant_id="${AD_PROTECTED_API_TENANT_ID:-}" \
 TF_VAR_azure_ad_audience="${AD_PROTECTED_API_AUDIENCE:-}" \
 TF_VAR_azure_ad_consumer1_client_id="${AD_CONSUMER1_CLIENT_ID:-}" \
 TF_VAR_azure_ad_consumer2_client_id="${AD_CONSUMER2_CLIENT_ID:-}" \
+TF_VAR_auth0_domain="${AUTH0_TF_VAR_DOMAIN}" \
+TF_VAR_auth0_dpop_api_identifier="${AUTH0_TF_VAR_API_IDENTIFIER}" \
+TF_VAR_auth0_dpop_client_id="${AUTH0_TF_VAR_CLIENT_ID}" \
+TF_VAR_auth0_dpop_client_secret="${AUTH0_TF_VAR_CLIENT_SECRET}" \
 TF_VAR_keycloak_realm="${KEYCLOAK_REALM:-kong-demo}" \
 TF_VAR_keycloak_allowed_role="${KEYCLOAK_ALLOWED_ROLE:-api-access}" \
 terraform -chdir=terraform/konnect apply -input=false -auto-approve
@@ -166,3 +251,7 @@ echo "Instance 2 Mock:   http://localhost:9202"
 echo "Orders V1 Mock:    http://localhost:9301"
 echo "Orders V2 Mock:    http://localhost:9302"
 echo "Keycloak:          http://localhost:8081"
+if [[ -n "${AUTH0_TF_VAR_DOMAIN}" ]]; then
+echo "Auth0 DPoP Route:  http://localhost:8000/orders/auth/auth0-dpop"
+echo "Auth0 Setup JSON:  $AUTH0_DPOP_SETUP_JSON"
+fi

@@ -23,6 +23,7 @@ This project is a local demo environment for **Konnect hybrid** scenarios built 
   - [End-To-End Diagram](#end-to-end-diagram)
 - [Configuration](#configuration)
   - [Environment Variables](#environment-variables)
+  - [Auth0 DPoP Setup](#auth0-dpop-setup)
   - [Certificates](#certificates)
 - [Run](#run)
 - [Demo Scenes](#demo-scenes)
@@ -448,11 +449,187 @@ Metering & Billing automation notes:
 - Azure AD tenant, audience, and client credentials
 - Keycloak bootstrap and demo client values
 
+Auth0 DPoP startup prerequisites:
+
+- You need an Auth0 tenant/account before running `./start-demo.sh` for the DPoP scene.
+- In Auth0, create or identify one **Machine to Machine Application** that will be used as the Management API client for bootstrap.
+- From that Management API bootstrap application, collect:
+  - `AUTH0_DOMAIN`
+  - `AUTH0_MANAGEMENT_CLIENT_ID`
+  - `AUTH0_MANAGEMENT_CLIENT_SECRET`
+- In Auth0, authorize that bootstrap application for the **Auth0 Management API** with these scopes:
+  - `read:clients`
+  - `create:clients`
+  - `update:clients`
+  - `read:resource_servers`
+  - `create:resource_servers`
+  - `update:resource_servers`
+  - `read:client_grants`
+  - `create:client_grants`
+  - `update:client_grants`
+- Put those values in `.env` before you run `./start-demo.sh`.
+
+If you want startup to reuse an existing Auth0 DPoP application instead of creating one:
+
+- In Auth0, create or identify the custom API that Kong will validate against and note its identifier.
+- In Auth0, create or identify the client application that will request DPoP-bound tokens and collect its:
+  - client ID
+  - client secret
+- Put these values in `.env` before startup:
+  - `AUTH0_DPOP_API_IDENTIFIER="https://kong.example.internal/dpop"`
+  - `AUTH0_DPOP_EXISTING_CLIENT_ID="your_existing_auth0_client_id"`
+  - `AUTH0_DPOP_CLIENT_SECRET="your_existing_auth0_client_secret"`
+
 UI link behavior:
 
 - `DEMO_LOGS_URL` sets the **Konnect Observability** button target.
 - `DEMO_DEBUGGER_URL` sets the **Debugger** button target.
 - Update those two values directly in `.env` if you want them to point at your own Konnect UI URLs.
+
+### Auth0 DPoP Setup
+
+The repo includes a dedicated bootstrap script for an Auth0-backed DPoP demo:
+
+- `python3 scripts/setup_auth0_dpop.py`
+
+This script is separate from the existing local Keycloak bootstrap. It is intended to prepare an Auth0 tenant so Kong can validate DPoP-bound access tokens with the `openid-connect` plugin using `proof_of_possession_dpop = "strict"`.
+
+When `AUTH0_DOMAIN`, `AUTH0_MANAGEMENT_CLIENT_ID`, and `AUTH0_MANAGEMENT_CLIENT_SECRET` are set in `.env`, `./start-demo.sh` now:
+
+- runs `scripts/setup_auth0_dpop.py`
+- creates or updates the Auth0 API, machine-to-machine application, and client grant
+- captures the generated Auth0 DPoP app details into `.runtime/auth0_dpop_setup.json`
+- passes the Auth0 issuer, audience, client ID, and client secret into Terraform so the Kong DPoP route and `openid-connect` plugin are created in the same startup flow
+- persists `AUTH0_DPOP_CLIENT_SECRET` into `.env` on first creation if it was previously blank, so later startup runs can reuse the Auth0 app secret even when Auth0 omits it from update responses
+
+Required inputs:
+
+- `AUTH0_DOMAIN`
+- `AUTH0_MANAGEMENT_CLIENT_ID`
+- `AUTH0_MANAGEMENT_CLIENT_SECRET`
+
+Prerequisites when reusing an existing Auth0 DPoP application:
+
+- `AUTH0_DPOP_API_IDENTIFIER="https://kong.example.internal/dpop"`
+- `AUTH0_DPOP_EXISTING_CLIENT_ID="your_existing_auth0_client_id"`
+- `AUTH0_DPOP_CLIENT_SECRET="your_existing_auth0_client_secret"`
+
+Optional inputs:
+
+- `AUTH0_MANAGEMENT_AUDIENCE`
+- `AUTH0_DPOP_API_NAME`
+- `AUTH0_DPOP_API_IDENTIFIER`
+- `AUTH0_DPOP_API_SCOPES`
+- `AUTH0_DPOP_APP_NAME`
+- `AUTH0_DPOP_EXISTING_CLIENT_ID`
+- `AUTH0_DPOP_REUSE_ONLY`
+- `AUTH0_DPOP_APP_TYPE`
+- `AUTH0_DPOP_TOKEN_ENDPOINT_AUTH_METHOD`
+- `AUTH0_DPOP_GRANT_TYPES`
+- `AUTH0_DPOP_ENABLE_DPOP`
+- `AUTH0_DPOP_CLIENT_FLAG_FIELD`
+
+Recommended startup default:
+
+- keep `AUTH0_DPOP_ENABLE_DPOP=false` in `.env`
+- let `./start-demo.sh` provision or reuse the Auth0 API, application, client grant, and Kong route/plugin
+- then enable DPoP manually in the Auth0 UI after startup
+
+The script authenticates to Auth0 by calling:
+
+- `https://{AUTH0_DOMAIN}/oauth/token`
+
+using the provided Management API machine-to-machine application credentials. It then uses the returned bearer token to call Auth0 Management API endpoints under:
+
+- `https://{AUTH0_DOMAIN}/api/v2/`
+
+Objects the script creates or updates in Auth0:
+
+- one **custom API / resource server**
+  - identifier defaults to `https://kong.example.internal/dpop`
+  - signing algorithm is set to `RS256`
+  - configured with the scopes from `AUTH0_DPOP_API_SCOPES`
+  - default scope example is `read:orders`
+- one **machine-to-machine application**
+  - app name defaults to `kong-dpop-m2m-client`
+  - app type defaults to `non_interactive`
+  - grant types default to `client_credentials`
+  - token endpoint auth method defaults to `client_secret_post`
+- one **client grant**
+  - authorizes the machine-to-machine application to request access tokens for the custom API
+  - scope list matches `AUTH0_DPOP_API_SCOPES`
+
+Important Auth0 scope rule:
+
+- `AUTH0_DPOP_API_SCOPES` must contain **custom API scopes**
+- do not use reserved OIDC scopes such as `openid`, `profile`, or `offline_access`
+- valid examples:
+  - `read:orders`
+  - `invoke:demo`
+
+Reuse behavior:
+
+- the script reuses an existing Auth0 API when `AUTH0_DPOP_API_IDENTIFIER` already exists
+- the script reuses an existing Auth0 application when:
+  - `AUTH0_DPOP_EXISTING_CLIENT_ID` is set, or
+  - `AUTH0_DPOP_APP_NAME` matches an existing application
+- if you want startup to use an existing Auth0 application and never create a new one, set:
+  - `AUTH0_DPOP_EXISTING_CLIENT_ID=<your existing client id>`
+  - `AUTH0_DPOP_REUSE_ONLY=true`
+
+The script can attempt to enable DPoP-bound access tokens on the created or updated Auth0 application when `AUTH0_DPOP_ENABLE_DPOP=true`. The repo default is `false` because Auth0 UI support is more reliable than the current Management API behavior for many tenants. When enabled, the script sends:
+
+- `dpop_bound_access_tokens = true`
+
+on the Auth0 client object. If your tenant exposes DPoP under a different Management API field name, override:
+
+- `AUTH0_DPOP_CLIENT_FLAG_FIELD`
+
+If Auth0 rejects that field, the script stops with a clear error after creating or updating the base client object so you can correct the tenant-specific setting.
+
+Expected Auth0 Management API scopes for the bootstrap client:
+
+- `read:clients`
+- `create:clients`
+- `update:clients`
+- `read:resource_servers`
+- `create:resource_servers`
+- `update:resource_servers`
+- `read:client_grants`
+- `create:client_grants`
+- `update:client_grants`
+
+What the script prints on success:
+
+- Auth0 issuer URL
+- OIDC discovery URL
+- created or updated API identifier and scopes
+- created or updated Auth0 client ID and client secret
+- created or updated client grant details
+- a Kong `openid-connect` config fragment showing:
+  - `issuer`
+  - `client_id`
+  - `client_secret`
+  - `auth_methods = ["bearer"]`
+  - `proof_of_possession_dpop = "strict"`
+- explicit Auth0 UI next steps for enabling DPoP:
+  - `Applications > APIs > <API> > Settings > Token Sender-Constraining`
+  - `Applications > Applications > <client app> > Settings > Token Sender-Constraining`
+
+Manual Auth0 DPoP enablement after the script runs:
+
+1. Open `Applications > APIs`, select the API created by the script, and open `Settings`.
+2. In `Token Sender-Constraining`, select `DPoP`.
+3. Enable `Require Token Sender-Constraining`.
+4. Save the API settings.
+5. Open `Applications > Applications`, select the client application created by the script, and open `Settings`.
+6. In `Token Sender-Constraining`, enable `Require Token Sender-Constraining`.
+7. Save the client application settings.
+
+What it does not create:
+
+- it does not create a full browser-based Auth0 application flow
+- it does not generate DPoP proofs on the client side
 
 ### Certificates
 

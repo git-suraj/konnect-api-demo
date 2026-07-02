@@ -5,6 +5,7 @@ const state = {
   consumer: "consumer-standard",
   identityConsumer: "consumer-1",
   identityToken: "",
+  dpopMode: "happy-path",
   ipPreset: "allowed",
   schemaCase: "valid-request",
   sizeCase: "positive",
@@ -48,6 +49,10 @@ const SCENE_DEFAULTS = {
   "identity-keycloak-authorization": {
     controlTitle: "Identity Controls",
     emptyText: "Generate a Keycloak token for the selected consumer, decode it, and send it through Kong for authorization.",
+  },
+  "identity-auth0-dpop": {
+    controlTitle: "DPoP Controls",
+    emptyText: "Run the DPoP flow to generate proof JWTs, request a sender-constrained token from Auth0, and send it through Kong.",
   },
   "network-policy-ip-allow-deny": {
     controlTitle: "Network Policy Controls",
@@ -137,6 +142,7 @@ const elements = {
   identityConsumerControls: document.getElementById("identityConsumerControls"),
   identityTokenControls: document.getElementById("identityTokenControls"),
   identityJwtControls: document.getElementById("identityJwtControls"),
+  dpopModeControls: document.getElementById("dpopModeControls"),
   ipPresetControls: document.getElementById("ipPresetControls"),
   schemaCaseControls: document.getElementById("schemaCaseControls"),
   sizeCaseControls: document.getElementById("sizeCaseControls"),
@@ -175,6 +181,7 @@ const regionButtons = Array.from(document.querySelectorAll("[data-region]"));
 const modeButtons = Array.from(document.querySelectorAll("[data-mode]"));
 const consumerButtons = Array.from(document.querySelectorAll("[data-consumer]"));
 const identityConsumerButtons = Array.from(document.querySelectorAll("[data-identity-consumer]"));
+const dpopModeButtons = Array.from(document.querySelectorAll("[data-dpop-mode]"));
 const resilienceScenarioButtons = Array.from(document.querySelectorAll("[data-resilience-scenario]"));
 const ipPresetButtons = Array.from(document.querySelectorAll("[data-ip-preset]"));
 const schemaCaseButtons = Array.from(document.querySelectorAll("[data-schema-case]"));
@@ -412,6 +419,15 @@ function computePreviewRows() {
       ["Consumer", state.identityConsumer],
     ];
   }
+  if (state.currentScene === "identity-auth0-dpop") {
+    return [
+      ["Method", "GET"],
+      ["Path", "/orders/auth/auth0-dpop"],
+      ["Identity Provider", "Auth0"],
+      ["Authorization", "DPoP-bound access token"],
+      ["DPoP Scenario", state.dpopMode.replaceAll("-", " ")],
+    ];
+  }
   return [
     ["Method", "GET"],
     ["Path", "/orders"],
@@ -511,6 +527,13 @@ function computeExpectedOutcome() {
     return state.identityConsumer === "consumer-1"
       ? "Kong should validate the Keycloak token, map the azp claim to the Kong Consumer, and authorize consumer-1 because its service account token contains the required role."
       : "Kong should validate the Keycloak token but reject consumer-2 at the authorization policy because its service account token does not contain the required role.";
+  }
+  if (state.currentScene === "identity-auth0-dpop") {
+    return state.dpopMode === "invalid-htu"
+        ? "Auth0 should issue a DPoP-bound token, but Kong should reject the API request because the DPoP proof claims it is for a different URL than the actual API call."
+      : state.dpopMode === "replay-attack"
+        ? "Auth0 should issue a DPoP-bound token and Kong should allow the first API call, but the immediate replay that reuses the same DPoP proof should be rejected."
+        : "Auth0 should issue a DPoP-bound token, Kong should validate the proof-of-possession on the API call, and the Orders API should receive the request.";
   }
   if (state.region === "missing") {
     return "Kong should match the catch-all route and apply the request-termination policy because the required x-region header is missing.";
@@ -711,6 +734,16 @@ function defaultTopologyForScene() {
       },
     };
   }
+  if (state.currentScene === "identity-auth0-dpop") {
+    return {
+      labels: {
+        client: ["Client", "DPoP Caller", state.dpopMode.replaceAll("-", " ")],
+        kong: ["Gateway", "Kong Data Plane", "strict DPoP validation"],
+        east: ["Protected API", "Orders API", "Awaiting sender-constrained request"],
+        west: ["Identity Provider", "Auth0", "Awaiting DPoP token exchange"],
+      },
+    };
+  }
   return {
     labels: {
       client: ["Client", "Web Caller", "GET /orders"],
@@ -764,6 +797,9 @@ function pendingTopologyForScene() {
       topology.labels.west[1],
       "Validating token",
     ];
+  } else if (state.currentScene === "identity-auth0-dpop") {
+    topology.labels.east = ["Protected API", "Orders API", "Waiting for DPoP validation"];
+    topology.labels.west = ["Identity Provider", "Auth0", "Issuing DPoP-bound token"];
   }
 
   return topology;
@@ -844,6 +880,18 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function renderPseudoLogicList(items) {
+  if (!Array.isArray(items) || !items.length) {
+    return "";
+  }
+  return `
+    <div class="console-section">
+      <span class="console-section-label">Pseudo Logic</span>
+      <pre class="console-code">${escapeHtml(items.join("\n"))}</pre>
+    </div>
+  `;
 }
 
 function renderConsolePane(title, statusMarkup, sections) {
@@ -1010,16 +1058,28 @@ function renderDetailView(detailView) {
   elements.detailSteps.innerHTML = steps
     .map((step, index) => {
       const command = step.command || "";
-      const response = stringifyPayload(step.response || {});
+      const explanation = step.explanation || "";
+      const responseObject = { ...(step.response || {}) };
+      const pseudoLogic = Array.isArray(responseObject.pseudo_logic) ? responseObject.pseudo_logic : [];
+      delete responseObject.pseudo_logic;
+      const response = stringifyPayload(responseObject);
       return `
         <section class="detail-step">
           <div class="detail-step-header">
             <p class="label">Step ${index + 1}</p>
             <strong>${escapeHtml(step.title || `Command ${index + 1}`)}</strong>
           </div>
+          ${
+            explanation
+              ? `
+          <p class="body-copy">${escapeHtml(explanation)}</p>
+          `
+              : ""
+          }
           <div class="detail-step-grid">
             <div class="detail-pane">
               <p class="label">Command</p>
+              ${renderPseudoLogicList(pseudoLogic)}
               <pre class="detail-pre">${escapeHtml(command)}</pre>
             </div>
             <div class="detail-pane">
@@ -1059,6 +1119,7 @@ function updateControlVisibility() {
   const isIdentityScene =
     state.currentScene === "identity-azure-token-validation" ||
     state.currentScene === "identity-keycloak-authorization";
+  const isDpopScene = state.currentScene === "identity-auth0-dpop";
   const isIpScene = state.currentScene === "network-policy-ip-allow-deny";
   const isSchemaScene = state.currentScene === "data-quality-schema-validation";
   const isSizeScene = state.currentScene === "traffic-control-request-size-limiting";
@@ -1072,7 +1133,7 @@ function updateControlVisibility() {
   const isDeprecationScene = state.currentScene === "api-lifecycle-deprecation";
   elements.headerRoutingControls.classList.toggle(
     "hidden",
-    isRateScene || isResilienceScene || isIdentityScene || isIpScene || isSchemaScene || isSizeScene || isMeteringScene || isDatakitScene || isCryptoScene || isInjectionScene || isTransportSecurityScene || isVersionedRoutingScene || isCanaryScene || isDeprecationScene,
+    isRateScene || isResilienceScene || isIdentityScene || isDpopScene || isIpScene || isSchemaScene || isSizeScene || isMeteringScene || isDatakitScene || isCryptoScene || isInjectionScene || isTransportSecurityScene || isVersionedRoutingScene || isCanaryScene || isDeprecationScene,
   );
   elements.rateModeControls.classList.toggle("hidden", !isRateScene);
   elements.rateCounterControls.classList.toggle("hidden", !isRateScene);
@@ -1094,6 +1155,7 @@ function updateControlVisibility() {
   elements.canaryHeaderControls.classList.toggle("hidden", !isCanaryScene || state.canaryScenario !== "header-based");
   elements.canaryConsumerControls.classList.toggle("hidden", !isCanaryScene || state.canaryScenario !== "consumer-based");
   elements.deprecationCaseControls.classList.toggle("hidden", !isDeprecationScene);
+  elements.dpopModeControls.classList.toggle("hidden", !isDpopScene);
   elements.identityTokenControls.classList.toggle("hidden", !isIdentityScene);
   elements.identityJwtControls.classList.toggle("hidden", !isIdentityScene);
   elements.identityConsumerControls.classList.toggle(
@@ -1224,6 +1286,9 @@ async function runScenario() {
     } else if (state.currentScene === "identity-keycloak-authorization") {
       path = "/api/scenes/identity/keycloak/run";
       body = { token: elements.tokenEditor.value.trim(), consumer: state.identityConsumer };
+    } else if (state.currentScene === "identity-auth0-dpop") {
+      path = "/api/scenes/identity/auth0-dpop/run";
+      body = { mode: state.dpopMode };
     }
 
     const response = await fetch(path, {
@@ -1232,6 +1297,9 @@ async function runScenario() {
       body: JSON.stringify(body),
     });
     const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Scenario execution failed.");
+    }
     state.lastRun = payload;
     elements.consoleDetailButton.disabled = false;
     elements.expectedOutcome.textContent = computeExpectedOutcome();
@@ -1430,6 +1498,10 @@ function getCurrentRequestId() {
   return headers["x-request-id"] || headers["X-Request-Id"] || null;
 }
 
+function getCurrentKongRequestId() {
+  return state.lastRun?.kongRequestId || state.lastRun?.result?.kongRequestId || null;
+}
+
 function getCurrentTraceId() {
   return state.lastRun?.traceId || state.lastRun?.result?.traceId || state.lastRun?.detailView?.traceId || null;
 }
@@ -1489,13 +1561,16 @@ function getTraceUrl() {
 
 function getPayloadInspectionUrl() {
   const requestId = getCurrentRequestId();
+  const kongRequestId = getCurrentKongRequestId();
   const baseUrl = state.links.payloadInspection && state.links.payloadInspection !== "#"
     ? state.links.payloadInspection
     : "http://localhost:3001/explore";
   const url = new URL(baseUrl, window.location.origin);
-  const query = requestId
-    ? `{service_name="kong-data-plane"} | request_id="${requestId}"`
-    : '{service_name="kong-data-plane"} | request_id="your-request-id"';
+  const query = kongRequestId
+    ? `{service_name="kong-data-plane"} | request_id="${kongRequestId}"`
+    : requestId
+      ? `{service_name="kong-data-plane"} | request_id="${requestId}"`
+      : '{service_name="kong-data-plane"} | request_id="your-request-id"';
   const paneState = {
     logs: {
       datasource: "loki",
@@ -1515,6 +1590,9 @@ function getPayloadInspectionUrl() {
   url.searchParams.set("panes", JSON.stringify(paneState));
   url.searchParams.set("schemaVersion", "1");
   url.searchParams.set("orgId", "1");
+  if (kongRequestId) {
+    url.searchParams.set("kong_request_id", kongRequestId);
+  }
   if (requestId) {
     url.searchParams.set("request_id", requestId);
   }
@@ -1558,6 +1636,15 @@ for (const button of identityConsumerButtons) {
     state.identityToken = "";
     elements.tokenEditor.value = "";
     elements.decodedJwtOutput.textContent = "Decode the current token to inspect its claims.";
+    updateStaticPreview();
+    resetView();
+  });
+}
+
+for (const button of dpopModeButtons) {
+  button.addEventListener("click", () => {
+    state.dpopMode = button.dataset.dpopMode;
+    setActiveButton(dpopModeButtons, "dpopMode", state.dpopMode);
     updateStaticPreview();
     resetView();
   });

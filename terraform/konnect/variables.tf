@@ -53,6 +53,31 @@ variable "azure_ad_consumer2_client_id" {
   default     = null
 }
 
+variable "auth0_domain" {
+  description = "Auth0 tenant domain used for the DPoP demo"
+  type        = string
+  default     = null
+}
+
+variable "auth0_dpop_api_identifier" {
+  description = "Auth0 custom API identifier used for the DPoP demo"
+  type        = string
+  default     = null
+}
+
+variable "auth0_dpop_client_id" {
+  description = "Auth0 DPoP demo client ID"
+  type        = string
+  default     = null
+}
+
+variable "auth0_dpop_client_secret" {
+  description = "Auth0 DPoP demo client secret"
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
 variable "keycloak_realm" {
   description = "Local Keycloak realm"
   type        = string

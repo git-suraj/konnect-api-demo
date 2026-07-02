@@ -28,7 +28,7 @@ services:
       KONG_PROXY_ACCESS_LOG: /dev/stdout
       KONG_PROXY_ERROR_LOG: /dev/stderr
       KONG_LOG_LEVEL: info
-      KONG_PLUGINS: bundled,payload-crypto-demo
+      KONG_PLUGINS: bundled,payload-crypto-demo,dpop-replay-demo
       KONG_LUA_PACKAGE_PATH: /opt/custom/?.lua;/opt/custom/?/init.lua;;
       KONG_NGINX_MAIN_ENV: CRYPTO_GATEWAY_PRIVATE_KEY_PASSPHRASE
       CRYPTO_GATEWAY_PRIVATE_KEY_PASSPHRASE: ${CRYPTO_GATEWAY_PRIVATE_KEY_PASSPHRASE:-gateway-demo-passphrase}
@@ -294,6 +294,10 @@ services:
       KEYCLOAK_CONSUMER2_CLIENT_ID: ${KEYCLOAK_CONSUMER2_CLIENT_ID:-consumer-2}
       KEYCLOAK_CONSUMER2_SECRET: ${KEYCLOAK_CONSUMER2_SECRET:-consumer-2-secret}
       KEYCLOAK_INTERNAL_BASE_URL: http://keycloak:8080
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+      AUTH0_DPOP_API_IDENTIFIER: ${AUTH0_DPOP_API_IDENTIFIER:-}
+      AUTH0_DPOP_EXISTING_CLIENT_ID: ${AUTH0_DPOP_EXISTING_CLIENT_ID:-}
+      AUTH0_DPOP_CLIENT_SECRET: ${AUTH0_DPOP_CLIENT_SECRET:-}
       CRYPTO_HELPER_URL: http://crypto-helper:8092
     ports:
       - "8080:8080"

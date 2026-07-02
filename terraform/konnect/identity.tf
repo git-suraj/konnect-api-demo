@@ -5,8 +5,15 @@ locals {
     try(trimspace(var.azure_ad_consumer1_client_id), "") != "",
     try(trimspace(var.azure_ad_consumer2_client_id), "") != "",
   ])
+  auth0_dpop_enabled = alltrue([
+    try(trimspace(var.auth0_domain), "") != "",
+    try(trimspace(var.auth0_dpop_api_identifier), "") != "",
+    try(trimspace(var.auth0_dpop_client_id), "") != "",
+    try(trimspace(var.auth0_dpop_client_secret), "") != "",
+  ])
   azure_ad_v1_issuer_discovery = local.azure_ad_enabled ? "https://login.microsoftonline.com/${var.azure_ad_tenant_id}/.well-known/openid-configuration" : null
   azure_ad_v1_issuer_claim     = local.azure_ad_enabled ? "https://sts.windows.net/${var.azure_ad_tenant_id}/" : null
+  auth0_dpop_discovery_url     = local.auth0_dpop_enabled ? "https://${var.auth0_domain}/.well-known/openid-configuration" : null
   keycloak_internal_issuer     = "http://keycloak:8080/realms/${var.keycloak_realm}"
 }
 
@@ -33,6 +40,13 @@ resource "konnect_gateway_consumer" "consumer_keycloak_consumer_1" {
 resource "konnect_gateway_consumer" "consumer_keycloak_consumer_2" {
   username         = "keycloak-consumer-2"
   custom_id        = "consumer-2"
+  control_plane_id = var.konnect_control_plane_id
+}
+
+resource "konnect_gateway_consumer" "consumer_auth0_dpop_client" {
+  count            = local.auth0_dpop_enabled ? 1 : 0
+  username         = "auth0-dpop-client"
+  custom_id        = var.auth0_dpop_client_id
   control_plane_id = var.konnect_control_plane_id
 }
 
@@ -77,6 +91,53 @@ resource "konnect_gateway_plugin_openid_connect" "openid_connect_azure" {
     consumer_claims         = [["appid"]]
     consumer_by             = ["custom_id"]
     verify_parameters       = false
+  }
+}
+
+resource "konnect_gateway_service" "svc_orders_auth0_dpop" {
+  count            = local.auth0_dpop_enabled ? 1 : 0
+  name             = "svc-orders-auth0-dpop"
+  protocol         = "http"
+  host             = "orders-east"
+  port             = 9101
+  path             = "/"
+  control_plane_id = var.konnect_control_plane_id
+}
+
+resource "konnect_gateway_route" "route_orders_auth0_dpop" {
+  count            = local.auth0_dpop_enabled ? 1 : 0
+  name             = "route-orders-auth0-dpop"
+  methods          = ["GET"]
+  paths            = ["/orders/auth/auth0-dpop"]
+  protocols        = ["http", "https"]
+  strip_path       = false
+  control_plane_id = var.konnect_control_plane_id
+
+  service = {
+    id = konnect_gateway_service.svc_orders_auth0_dpop[0].id
+  }
+}
+
+resource "konnect_gateway_plugin_openid_connect" "openid_connect_auth0_dpop" {
+  count            = local.auth0_dpop_enabled ? 1 : 0
+  control_plane_id = var.konnect_control_plane_id
+  route = {
+    id = konnect_gateway_route.route_orders_auth0_dpop[0].id
+  }
+
+  config = {
+    issuer                   = local.auth0_dpop_discovery_url
+    auth_methods             = ["bearer"]
+    bearer_token_param_type  = ["header"]
+    audience_claim           = ["aud"]
+    audience_required        = [var.auth0_dpop_api_identifier]
+    consumer_claims          = [["azp"]]
+    consumer_by              = ["custom_id"]
+    client_id                = [var.auth0_dpop_client_id]
+    client_secret            = [var.auth0_dpop_client_secret]
+    display_errors           = true
+    proof_of_possession_dpop = "strict"
+    verify_parameters        = false
   }
 }
 

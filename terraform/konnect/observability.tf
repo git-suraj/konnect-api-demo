@@ -109,6 +109,46 @@ locals {
     local cjson = require("cjson.safe")
     return cjson.encode(kong.response.get_headers(1000) or {})
   LUA
+
+  access_log_response_body_json = <<-LUA
+    local cjson = require("cjson.safe")
+    local body = kong.ctx.shared.obs_response_body
+    if body and body ~= "" then
+      return body
+    end
+
+    local headers = kong.response.get_headers(1000) or {}
+    local serialized = kong.log.serialize()
+    local www_authenticate = headers["www-authenticate"] or headers["WWW-Authenticate"]
+    local dpop_nonce = headers["dpop-nonce"] or headers["DPoP-Nonce"]
+    local auth_scheme = nil
+    local auth_error = nil
+    local auth_error_description = nil
+
+    if type(www_authenticate) == "string" and www_authenticate ~= "" then
+      auth_scheme = www_authenticate:match("^([%a_%-]+)")
+      auth_error = www_authenticate:match('error="([^"]+)"')
+      auth_error_description = www_authenticate:match('error_description="([^"]+)"')
+    end
+
+    local payload = {
+      generated_by = "observability-fallback",
+      status = kong.response.get_status(),
+      response_source = serialized.source,
+      route = serialized.route and serialized.route.name or nil,
+      service = serialized.service and serialized.service.name or nil,
+      www_authenticate = www_authenticate,
+      www_authenticate_scheme = auth_scheme,
+      www_authenticate_error = auth_error,
+      www_authenticate_error_description = auth_error_description,
+      dpop_nonce = dpop_nonce,
+      kong_request_id = serialized.request and serialized.request.id or nil,
+      request_id = (kong.ctx.shared.obs_request_headers or {})["x-request-id"]
+        or (kong.ctx.shared.obs_request_headers or {})["X-Request-Id"],
+      note = "Original response body was empty or unavailable in body_filter; fallback fields were logged instead.",
+    }
+    return cjson.encode(payload)
+  LUA
 }
 
 resource "konnect_gateway_plugin_post_function" "observability_capture" {
@@ -152,7 +192,7 @@ resource "konnect_gateway_plugin_opentelemetry" "observability" {
         "request_headers"                   = local.access_log_request_headers_json
         "request.body"                      = "return kong.ctx.shared.obs_request_body"
         "response_headers"                  = local.access_log_response_headers_json
-        "response.body"                     = "return kong.ctx.shared.obs_response_body"
+        "response.body"                     = local.access_log_response_body_json
         "crypto_algorithm"                  = "return kong.ctx.shared.crypto_algorithm"
         "crypto_encrypted_request_payload"  = "return kong.ctx.shared.crypto_encrypted_request_payload"
         "crypto_decrypted_request_payload"  = "return kong.ctx.shared.crypto_decrypted_request_payload"
