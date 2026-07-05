@@ -530,7 +530,11 @@ function computeExpectedOutcome() {
   }
   if (state.currentScene === "identity-auth0-dpop") {
     return state.dpopMode === "invalid-htu"
-        ? "Auth0 should issue a DPoP-bound token, but Kong should reject the API request because the DPoP proof claims it is for a different URL than the actual API call."
+      ? "Auth0 should issue a DPoP-bound token, but Kong should reject the API request because the DPoP proof claims it is for a different URL than the actual API call."
+      : state.dpopMode === "invalid-htm"
+        ? "Auth0 should issue a DPoP-bound token, but Kong should reject the API request because the DPoP proof claims a different HTTP method than the actual API call."
+      : state.dpopMode === "missing-ath"
+        ? "Auth0 should issue a DPoP-bound token, but Kong should reject the API request because the DPoP proof omits the ath claim that binds the proof to the presented token."
       : state.dpopMode === "replay-attack"
         ? "Auth0 should issue a DPoP-bound token and Kong should allow the first API call, but the immediate replay that reuses the same DPoP proof should be rejected."
         : "Auth0 should issue a DPoP-bound token, Kong should validate the proof-of-possession on the API call, and the Orders API should receive the request.";

@@ -20,6 +20,14 @@ local schema = {
               default = "dpop-replay-demo",
             },
           },
+          {
+            max_iat_skew_seconds = {
+              type = "integer",
+              required = true,
+              default = 300,
+              between = { 1, 3600 },
+            },
+          },
         },
       },
     },

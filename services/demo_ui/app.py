@@ -196,7 +196,10 @@ SCENES = {
         "title": "Auth0 DPoP Validation",
         "services": ["svc-orders-auth0-dpop"],
         "routes": ["route-orders-auth0-dpop"],
-        "plugins": ["openid-connect on route-orders-auth0-dpop"],
+        "plugins": [
+            "dpop-replay-demo on route-orders-auth0-dpop",
+            "openid-connect on route-orders-auth0-dpop",
+        ],
         "controlPlane": "Konnect control plane",
         "dataPlane": "Local hybrid data plane",
         "publicPath": "/orders/auth/auth0-dpop",
@@ -211,6 +214,8 @@ SCENES = {
         "scenarios": [
             "happy-path",
             "invalid-htu",
+            "invalid-htm",
+            "missing-ath",
             "replay-attack",
         ],
     },
@@ -718,7 +723,44 @@ DEPRECATION_CASES = {
 DPOP_TEST_MODES = {
     "happy-path": "The client sends the required DPoP proof to Auth0 when requesting the token, then sends a second DPoP proof to Kong when calling the protected API. The same key is used consistently across both steps.",
     "invalid-htu": "Auth0 issues a valid DPoP-bound token, but the client sends an API DPoP proof whose `htu` claim does not match the actual Kong URL being called. Kong should reject the request because the proof is bound to the wrong endpoint.",
+    "invalid-htm": "Auth0 issues a valid DPoP-bound token, but the client sends an API DPoP proof whose `htm` claim does not match the actual HTTP method. Kong should reject the request because the proof is bound to a different method.",
+    "missing-ath": "Auth0 issues a valid DPoP-bound token, but the client sends an API DPoP proof without the required `ath` claim. Kong should reject the request because the proof is not bound to the presented access token.",
     "replay-attack": "The client first makes one valid DPoP-protected API call, then immediately replays the exact same Authorization token and exact same DPoP proof to Kong. Kong should reject the replayed proof because it is being reused instead of being freshly generated for a new request.",
+}
+
+DPOP_CLAIM_GLOSSARY = {
+    "htu": "HTTP URI. The exact URL the DPoP proof is meant for. If this does not match the real API URL, the proof is being presented to the wrong endpoint.",
+    "htm": "HTTP Method. The exact HTTP verb the proof is meant for, such as GET or POST. If this does not match the real method, the proof is for a different kind of request.",
+    "ath": "Access Token Hash. A SHA-256 hash of the presented access token, base64url-encoded. It ties the proof to that exact token so the proof cannot be reused with some other token.",
+    "iat": "Issued At. The time the proof was created. Kong can reject proofs that are too old or too far in the future.",
+    "jti": "JWT ID. A unique identifier for one proof instance. Reusing the same jti means the same proof is being replayed instead of freshly generated.",
+}
+
+DPOP_NEGATIVE_SCENARIO_GUIDE = {
+    "invalid-htu": {
+        "broken_claim": "htu",
+        "simple_explanation": "The proof says it was created for a different URL than the one being called.",
+        "what_kong_checks": "Kong compares the proof's htu claim with the actual request URL it received.",
+        "why_rejected": "If those URLs do not match, the proof could have been created for some other endpoint, so Kong rejects it.",
+    },
+    "invalid-htm": {
+        "broken_claim": "htm",
+        "simple_explanation": "The proof says it was created for a different HTTP method than the one actually used.",
+        "what_kong_checks": "Kong compares the proof's htm claim with the real request method, such as GET or POST.",
+        "why_rejected": "If the proof says POST but the request is actually GET, the proof does not describe this request, so Kong rejects it.",
+    },
+    "missing-ath": {
+        "broken_claim": "ath",
+        "simple_explanation": "The proof is not cryptographically tied to the access token being presented.",
+        "what_kong_checks": "Kong expects the proof to carry ath, which is the hash of the exact access token in Authorization: DPoP.",
+        "why_rejected": "Without ath, the proof does not prove that this specific token is the one the client intended to use.",
+    },
+    "replay-attack": {
+        "broken_claim": "jti",
+        "simple_explanation": "The same proof is being reused instead of generating a fresh one.",
+        "what_kong_checks": "The custom plugin reads jti from the DPoP proof payload and stores it in a replay cache.",
+        "why_rejected": "When the same jti appears again, Kong treats the proof as a replay and rejects it.",
+    },
 }
 
 TRANSPORT_SECURITY_CASES = {
@@ -1464,7 +1506,19 @@ def auth0_dpop_http_request(url: str, method: str, headers: dict[str, str], body
         return {"status": exc.code, "headers": {k.lower(): v for k, v in exc.headers.items()}, "body": parse_response_body(raw_body)}
 
 
-def request_with_dpop(url: str, method: str, *, body: bytes | None, extra_headers: dict[str, str], key_material: dict, access_token: str | None = None, include_proof: bool = True, wrong_htu: bool = False):
+def request_with_dpop(
+    url: str,
+    method: str,
+    *,
+    body: bytes | None,
+    extra_headers: dict[str, str],
+    key_material: dict,
+    access_token: str | None = None,
+    include_proof: bool = True,
+    wrong_htu: bool = False,
+    proof_method_override: str | None = None,
+    include_ath: bool = True,
+):
     nonce = None
     proof = None
     for _ in range(2):
@@ -1473,8 +1527,13 @@ def request_with_dpop(url: str, method: str, *, body: bytes | None, extra_header
             headers["Authorization"] = access_token
         if include_proof:
             htu = f"{url}/wrong" if wrong_htu else url
-            ath = b64url_encode(hashlib.sha256(access_token.split(" ", 1)[1].encode("utf-8")).digest()) if access_token and access_token.startswith("DPoP ") else None
-            proof = build_dpop_proof(htu, method, key_material["private_key_path"], key_material["public_jwk"], nonce=nonce, ath=ath)
+            proof_method = proof_method_override or method
+            ath = (
+                b64url_encode(hashlib.sha256(access_token.split(" ", 1)[1].encode("utf-8")).digest())
+                if include_ath and access_token and access_token.startswith("DPoP ")
+                else None
+            )
+            proof = build_dpop_proof(htu, proof_method, key_material["private_key_path"], key_material["public_jwk"], nonce=nonce, ath=ath)
             headers["DPoP"] = proof["jwt"]
         response = auth0_dpop_http_request(url, method, headers, body)
         next_nonce = response["headers"].get("dpop-nonce")
@@ -2271,6 +2330,8 @@ class DemoHandler(BaseHTTPRequestHandler):
                         access_token=authorization_value,
                         include_proof=True,
                         wrong_htu=mode == "invalid-htu",
+                        proof_method_override="POST" if mode == "invalid-htm" else None,
+                        include_ath=mode != "missing-ath",
                     )
                 final_exchange = api_exchange
                 api_response = final_exchange["response"] if final_exchange else None
@@ -2311,11 +2372,16 @@ class DemoHandler(BaseHTTPRequestHandler):
             failure_reason = (
                 "htu claim does not match the Kong API URL"
                 if mode == "invalid-htu"
+                else "htm claim does not match the actual HTTP method"
+                if mode == "invalid-htm"
+                else "ath claim is missing from the proof"
+                if mode == "missing-ath"
                 else "replayed proof reused from previous request"
                 if mode == "replay-attack"
                 else "none"
             )
             actual_service = api_response["body"].get("service") if api_success and isinstance(api_response["body"], dict) else "No upstream call"
+            negative_scenario = DPOP_NEGATIVE_SCENARIO_GUIDE.get(mode)
             payload = {
                 "scene": scene["id"],
                 "sceneDetails": scene,
@@ -2332,7 +2398,7 @@ class DemoHandler(BaseHTTPRequestHandler):
                     "routeState": route_state,
                     "routeMatched": "route-orders-auth0-dpop",
                     "kongServiceMatched": "svc-orders-auth0-dpop",
-                    "pluginApplied": "openid-connect on route-orders-auth0-dpop",
+                    "pluginApplied": "dpop-replay-demo + openid-connect on route-orders-auth0-dpop",
                     "selectedService": api_response["body"].get("service") if api_success and isinstance(api_response["body"], dict) else None,
                     "responseBody": api_response["body"] if api_response else token_response["body"],
                     "responseHeaders": api_response["headers"] if api_response else token_response["headers"],
@@ -2363,7 +2429,7 @@ class DemoHandler(BaseHTTPRequestHandler):
                         [
                             ("Kong Route", "route-orders-auth0-dpop"),
                             ("Kong Service", "svc-orders-auth0-dpop"),
-                            ("Kong Plugin", "openid-connect on route-orders-auth0-dpop"),
+                            ("Kong Plugin", "dpop-replay-demo + openid-connect on route-orders-auth0-dpop"),
                             ("Kong Consumer", "auth0-dpop-client"),
                             ("Consumer Mapping", consumer_mapping_description("Auth0")),
                             ("Identity Provider", "Auth0"),
@@ -2371,6 +2437,18 @@ class DemoHandler(BaseHTTPRequestHandler):
                             ("DPoP Mode", mode),
                             ("DPoP Mode Meaning", DPOP_TEST_MODES[mode]),
                             ("DPoP Failure Injection", failure_reason),
+                            (
+                                "Negative Scenario Summary",
+                                negative_scenario["simple_explanation"] if negative_scenario else "Not a negative scenario",
+                            ),
+                            (
+                                "Broken DPoP Claim",
+                                negative_scenario["broken_claim"] if negative_scenario else "None",
+                            ),
+                            ("Claim htu", DPOP_CLAIM_GLOSSARY["htu"]),
+                            ("Claim htm", DPOP_CLAIM_GLOSSARY["htm"]),
+                            ("Claim ath", DPOP_CLAIM_GLOSSARY["ath"]),
+                            ("Claim jti", DPOP_CLAIM_GLOSSARY["jti"]),
                             ("Proof Key Usage", proof_key_used),
                             ("Auth0 Token Status", token_response["status"]),
                             (
@@ -2576,15 +2654,35 @@ class DemoHandler(BaseHTTPRequestHandler):
                                     "8. Kong checks: token valid, proof present, proof URL/method match, ath matches token, and proof key matches token-bound key.",
                                     "9. If all checks pass, Kong proxies upstream; otherwise it rejects the request.",
                                 ],
-                                "what_is_missing_or_wrong": (
+                                    "what_is_missing_or_wrong": (
                                     "Nothing is missing in happy-path mode."
                                     if mode == "happy-path"
                                     else (
                                         "The DPoP header is present, but the proof payload says `htu=<wrong url>` instead of the real Kong API URL. Kong should reject it because the proof is bound to a different endpoint."
                                         if mode == "invalid-htu"
+                                        else "The DPoP header is present, but the proof payload says `htm=POST` while the actual request is `GET`. Kong should reject it because the proof is bound to a different HTTP method."
+                                        if mode == "invalid-htm"
+                                        else "The DPoP header is present, but the proof is missing the `ath` claim that binds the proof to the presented access token. Kong should reject it."
+                                        if mode == "missing-ath"
                                         else "Nothing is wrong in this first API call. It is the original valid request whose token and proof will be reused unchanged in the replay step."
                                     )
                                 ),
+                                    "negative_scenario_explained": (
+                                        {
+                                            "scenario": mode,
+                                            "broken_claim": negative_scenario["broken_claim"],
+                                            "claim_meaning": DPOP_CLAIM_GLOSSARY[negative_scenario["broken_claim"]],
+                                            "simple_explanation": negative_scenario["simple_explanation"],
+                                            "what_kong_checks": negative_scenario["what_kong_checks"],
+                                            "why_kong_rejects_it": negative_scenario["why_rejected"],
+                                        }
+                                        if negative_scenario
+                                        else {
+                                            "scenario": mode,
+                                            "summary": "This is the happy path, so no DPoP field is intentionally wrong or missing.",
+                                        }
+                                    ),
+                                    "dpop_claim_glossary": DPOP_CLAIM_GLOSSARY,
                                     "proof": api_exchange["proof"],
                                 }
                                 if api_exchange
@@ -2629,6 +2727,14 @@ class DemoHandler(BaseHTTPRequestHandler):
                                                 "signature_verification": "not done by the replay plugin; still done by the openid-connect plugin",
                                             },
                                             "what_is_missing_or_wrong": "The replay request is missing a fresh DPoP proof. Instead of creating a new proof with a new jti and new signature, it reuses the old proof from Step 3.",
+                                            "negative_scenario_explained": {
+                                                "scenario": "replay-attack",
+                                                "broken_claim": "jti",
+                                                "claim_meaning": DPOP_CLAIM_GLOSSARY["jti"],
+                                                "simple_explanation": DPOP_NEGATIVE_SCENARIO_GUIDE["replay-attack"]["simple_explanation"],
+                                                "what_kong_checks": DPOP_NEGATIVE_SCENARIO_GUIDE["replay-attack"]["what_kong_checks"],
+                                                "why_kong_rejects_it": DPOP_NEGATIVE_SCENARIO_GUIDE["replay-attack"]["why_rejected"],
+                                            },
                                             "proof": replay_exchange["proof"],
                                         }
                                         if replay_exchange
@@ -2648,7 +2754,7 @@ class DemoHandler(BaseHTTPRequestHandler):
                 "topology": {
                     "labels": {
                         "client": ("Client", "DPoP Caller", mode.replace("-", " ")),
-                        "kong": ("Gateway", "Kong Data Plane", "openid-connect strict DPoP"),
+                        "kong": ("Gateway", "Kong Data Plane", "dpop-replay-demo + openid-connect strict DPoP"),
                         "east": ("Protected API", "Orders API", "Reached" if api_success else "Not reached"),
                         "west": ("Identity Provider", "Auth0", "DPoP token exchange"),
                     },

@@ -16,3 +16,4 @@ certs/crypto/
 __pycache__/
 *.pyc
 .runtime/
+test

@@ -10,8 +10,9 @@ resource "konnect_gateway_custom_plugin" "dpop_replay_demo" {
   enabled          = true
   control_plane_id = var.konnect_control_plane_id
   config = jsonencode({
-    replay_ttl_seconds = 300
-    cache_prefix       = "dpop-replay-demo"
+    replay_ttl_seconds   = 300
+    cache_prefix         = "dpop-replay-demo"
+    max_iat_skew_seconds = 300
   })
 
   route = {
