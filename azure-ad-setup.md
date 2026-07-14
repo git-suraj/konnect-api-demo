@@ -1,6 +1,4 @@
-Yes — but from scratch, for client credentials, I strongly recommend App Roles, not delegated scopes.
 
-Reason: Microsoft says .default is required for client credentials, and app-only tokens may be issued without roles unless the API enforces/uses app roles. Delegated scopes are mainly for user-delegated access.  ￼
 
 Step-by-step Azure AD setup
 
